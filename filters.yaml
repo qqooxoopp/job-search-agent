@@ -1,0 +1,37 @@
+# 篩選規則設定檔
+# 改條件只要改這個檔案，不用動程式碼。
+# 所有比對都不分大小寫，只要「包含」這些字就算符合。
+
+# 職稱必須包含以下任一個關鍵字，才會留下
+title_include:
+  - Program Manager          # 也涵蓋 Technical Program Manager、Senior Program Manager
+  - Technical Program Manager
+  - Project Manager
+  - Delivery Manager
+  - Production Manager
+  - Producer
+
+# 職稱或公司名稱包含以下任一個字，就排除
+# 注意：alert 信裡沒有完整 JD，所以這裡只能檢查職稱和公司名稱。
+# 公司所屬產業要等之後讀到完整 JD、做 ATS 分析時才能判斷。
+exclude_keywords:
+  - agency
+  - advertising
+  - manufacturing
+
+# 地點必須包含以下任一個城市
+locations:
+  - Toronto
+  - Guelph
+  - Waterloo
+  - Vancouver
+  - Kitchener
+  - Mississauga
+  - Ontario
+
+# 地點或標籤寫 Remote、而且在加拿大的，也留下
+allow_remote_canada: true
+
+# 有列薪資時，最高薪資低於這個數字就排除（加幣年薪）
+# 沒有列薪資的職缺一律保留
+min_salary: 75000

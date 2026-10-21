@@ -1,0 +1,64 @@
+# 每天早上 8 點（多倫多時間）自動執行 main.py
+#
+# GitHub 的排程用 UTC 時間，而多倫多有夏令時間：
+#   夏令時間 EDT（3 月到 11 月初）：早上 8 點 = UTC 12:00
+#   冬令時間 EST（11 月初到 3 月）：早上 8 點 = UTC 13:00
+# 所以兩個時間都排，再由第一個步驟檢查「現在是不是多倫多 8 點」，不是就跳過。
+# 這樣一年四季都會在 8 點跑，而且一天只跑一次。
+
+name: Daily job search
+
+on:
+  schedule:
+    - cron: "0 12 * * *"
+    - cron: "0 13 * * *"
+  workflow_dispatch: # 允許在 GitHub 網頁上手動按按鈕執行（測試用）
+    inputs:
+      days_back:
+        description: "讀最近幾天的信"
+        default: "1"
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30 # 萬一卡住，30 分鐘後強制停止
+
+    steps:
+      - name: Check it is 8am in Toronto
+        id: gate
+        run: |
+          hour=$(TZ=America/Toronto date +%H)
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] || [ "$hour" = "08" ]; then
+            echo "go=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "多倫多現在是 ${hour} 點，不是 8 點，這次跳過。"
+            echo "go=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Get the code
+        if: steps.gate.outputs.go == 'true'
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        if: steps.gate.outputs.go == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install packages
+        if: steps.gate.outputs.go == 'true'
+        run: pip install -r requirements.txt
+
+      - name: Run job search
+        if: steps.gate.outputs.go == 'true'
+        env:
+          # 這些值存在 GitHub Secrets 裡，不會出現在程式碼或執行紀錄中
+          GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          CV_TEXT: ${{ secrets.CV_TEXT }}
+          DAYS_BACK: ${{ github.event.inputs.days_back || '1' }}
+        run: python main.py "$DAYS_BACK"

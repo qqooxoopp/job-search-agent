@@ -1,0 +1,17 @@
+# 機密資料，絕對不能上傳
+.env
+service_account.json
+
+# 個人資料：信件內容、履歷、求職紀錄
+sample_alert.html
+cv.txt
+rejected_jobs.csv
+analysis_cache.json
+jds/
+
+# Python 暫存檔和虛擬環境
+__pycache__/
+.venv/
+
+# Mac 系統自動產生的檔案
+.DS_Store
