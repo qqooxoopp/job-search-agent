@@ -17,7 +17,17 @@ import gspread
 from dotenv import load_dotenv
 
 load_dotenv()
-GOOGLE_SHEET_ID = os.getenv("GOOGLE_SHEET_ID")
+
+
+def clean_sheet_id(value):
+    """去掉多餘的空格、換行和引號；如果貼的是完整網址，就抓出 /d/ 後面的 ID。"""
+    value = (value or "").strip().strip("\"'").strip()
+    if "/d/" in value:
+        value = value.split("/d/")[1].split("/")[0]
+    return value
+
+
+GOOGLE_SHEET_ID = clean_sheet_id(os.getenv("GOOGLE_SHEET_ID"))
 SERVICE_ACCOUNT_FILE = "service_account.json"  # 從 Google Cloud 下載的金鑰
 
 JOBS_TAB = "Jobs"
@@ -46,7 +56,14 @@ def connect():
         client = gspread.service_account_from_dict(json.loads(key_json))
     else:
         client = gspread.service_account(filename=SERVICE_ACCOUNT_FILE)
-    return client.open_by_key(GOOGLE_SHEET_ID)
+    try:
+        return client.open_by_key(GOOGLE_SHEET_ID)
+    except gspread.SpreadsheetNotFound:
+        raise SystemExit(
+            "找不到 Google Sheet。請檢查：\n"
+            f"  1. GOOGLE_SHEET_ID 是否正確（目前讀到的長度是 {len(GOOGLE_SHEET_ID)} 個字元，通常是 44 個）\n"
+            f"  2. Sheet 有沒有共用給這個 service account（編輯者權限）：{client.auth.service_account_email}"
+        )
 
 
 def get_tab(sheet, title, headers):
