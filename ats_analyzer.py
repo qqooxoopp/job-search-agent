@@ -5,7 +5,8 @@
   步驟 1：找 JD。如果 jds/ 資料夾有手動存的 JD 就直接用；
           沒有的話，讓 Claude 用網路搜尋找到職缺並整理重點。
   步驟 2：分析。把你的履歷 (cv.txt) 和 JD 給 Claude，
-          用固定的資料格式回傳 ATS 分數、符合和缺少的關鍵字、硬傷、建議。
+          讓 Claude 逐項檢查必要條件、加分條件、關鍵字和職稱年資，
+          再由程式依固定 rubric 算出分數（見下方「評分 rubric」）。
 
 分析過的職缺會存進 analysis_cache.json，下次不會重複分析（省錢）。
 
@@ -48,19 +49,56 @@ client = anthropic.Anthropic()
 usage_totals = {"input": 0, "output": 0, "searches": 0}
 
 
-# ---------- 分析結果的資料格式 ----------
-class ATSResult(BaseModel):
+# ---------- 評分 rubric ----------
+# 分數由程式計算，不讓模型自己給一個數字，這樣每次的標準都一樣。
+# 模型只負責「逐項檢查」：每個條件符不符合、每個關鍵字有沒有出現。
+#
+#   必要條件 Required qualifications   40 分  符合=1、部分符合=0.5、不符合=0
+#   關鍵字覆蓋 Keyword coverage          30 分  JD 重要關鍵字在履歷出現的比例
+#   職稱與年資 Title & seniority         20 分  0–4 級（見 prompt 裡的定義）× 5
+#   加分條件 Preferred qualifications   10 分  同必要條件的計分方式
+#
+# 分數只代表「履歷和 JD 的符合程度」。個人偏好（廣告/代理商、薪資）不扣分，
+# 只影響「建議」欄，避免一個不喜歡的產業把分數拉到很低、看不出真實落差。
+WEIGHT_REQUIRED = 40
+WEIGHT_KEYWORDS = 30
+WEIGHT_TITLE = 20
+WEIGHT_PREFERRED = 10
+
+APPLY_AT = 65  # 分數 ≥ 65 而且沒有硬傷 → 投遞
+STRETCH_AT = 45  # 分數 ≥ 45 → 可試；低於 45 → 略過
+
+STATUS_CREDIT = {"met": 1.0, "partial": 0.5, "missing": 0.0}
+
+
+# ---------- 模型回傳的資料格式 ----------
+class Check(BaseModel):
+    """JD 裡的一個條件，以及履歷是否符合。"""
+
+    item: str  # JD 的條件，保留原文
+    status: Literal["met", "partial", "missing"]
+    evidence: str  # 履歷裡的依據（簡短）；missing 就留空
+
+
+class KeywordCheck(BaseModel):
+    keyword: str  # JD 裡的寫法，英文
+    found: bool  # 履歷有同一個詞或明確的同義詞
+
+
+class ATSChecks(BaseModel):
     """步驟 2 回傳的固定格式。Claude 的回答一定會符合這個結構。"""
 
-    ats_score: int  # 0–100
-    verdict: Literal["apply", "stretch", "skip"]
-    reason: str  # 一兩句話說明建議，繁體中文
-    matched_keywords: list[str]
-    missing_keywords: list[str]
+    required_checks: list[Check]
+    preferred_checks: list[Check]
+    keywords: list[KeywordCheck]
+    title_level: int  # 0–4
+    title_note: str  # 一句話說明職稱與年資的判斷
     dealbreakers: list[str]  # 不符合的硬性要求
+    reason: str  # 一兩句話說明主要落差，繁體中文
     industry: str
     is_agency_or_advertising: bool
     salary: str  # JD 有寫才填，沒寫就空字串
+    salary_below_floor: bool  # 薪資範圍的最高值低於下限才是 true；沒寫薪資就是 false
     work_arrangement: str  # Remote / Hybrid（幾天）/ Onsite / 未知
 
 
@@ -92,6 +130,54 @@ def load_cache():
 def save_cache(cache):
     with open(CACHE_FILE, "w", encoding="utf-8") as f:
         json.dump(cache, f, ensure_ascii=False, indent=2)
+
+
+# ---------- 計分 ----------
+def ratio(checks):
+    if not checks:
+        return None
+    return sum(STATUS_CREDIT[c.status] for c in checks) / len(checks)
+
+
+def score(checks: ATSChecks):
+    """依 rubric 算出總分和各項分數。"""
+    required = ratio(checks.required_checks) or 0.0
+    # JD 沒有列加分條件時，就用必要條件的比例，不白送也不白扣
+    preferred = ratio(checks.preferred_checks)
+    if preferred is None:
+        preferred = required
+    total_keywords = len(checks.keywords)
+    keywords = sum(k.found for k in checks.keywords) / total_keywords if total_keywords else 0.0
+    title = max(0, min(4, checks.title_level)) / 4
+
+    parts = {
+        "必要": round(required * WEIGHT_REQUIRED),
+        "關鍵字": round(keywords * WEIGHT_KEYWORDS),
+        "職稱年資": round(title * WEIGHT_TITLE),
+        "加分": round(preferred * WEIGHT_PREFERRED),
+    }
+    return sum(parts.values()), parts
+
+
+def decide(total, checks: ATSChecks):
+    """建議：先看分數，再套用硬傷和個人偏好。回傳 (verdict, 附註)。"""
+    notes = []
+    if total >= APPLY_AT:
+        verdict = "apply"
+    elif total >= STRETCH_AT:
+        verdict = "stretch"
+    else:
+        verdict = "skip"
+
+    if checks.dealbreakers and verdict == "apply":
+        verdict = "stretch"
+    if checks.is_agency_or_advertising:
+        verdict = "skip"
+        notes.append("⚠️ 廣告/代理商，不符偏好")
+    if checks.salary_below_floor:
+        verdict = "skip"
+        notes.append("⚠️ 薪資低於下限")
+    return verdict, notes
 
 
 # ---------- 步驟 1：找 JD ----------
@@ -173,24 +259,45 @@ def get_jd(job):
 
 # ---------- 步驟 2：ATS 分析 ----------
 def analyze(job, cv, jd_text, rules):
-    """比對履歷和 JD，回傳 ATSResult。"""
-    system = f"""You are an honest ATS (applicant tracking system) evaluator and career advisor.
+    """比對履歷和 JD：模型逐項檢查，程式依 rubric 算分。回傳 dict。"""
+    system = f"""You are an honest ATS (applicant tracking system) evaluator.
+You do NOT give an overall score. You check items one by one; the score is computed from your checks.
 
 Today's date is {date.today().strftime('%B %d, %Y')}. Any date in the CV on or before today is in the past:
 a certification or degree dated on or before today has already been earned, not "expected".
 The CV may contain LaTeX markup; ignore the markup and read the content.
 
-Rules:
-- Score only what the CV actually shows. Never credit skills, titles or domains the CV does not contain.
-- ats_score (0-100) estimates keyword and requirement match the way an ATS and a recruiter screen would. Be strict.
-- dealbreakers: hard requirements the candidate clearly does not meet (e.g. required years in a specific role,
-  mandatory domain experience, required language, location/relocation, required certification).
-- verdict: "apply" = realistic fit; "stretch" = possible but with real gaps; "skip" = dealbreakers or poor fit.
-- The candidate does NOT want agency or advertising roles. Salary is acceptable if the TOP of the stated range
-  is at least {rules['min_salary']:,} CAD; do not penalize a low bottom of the range. Factor these into the verdict.
-- If the job description says details are missing, the source is unreliable, or the posting may be closed,
-  mention that in "reason" so the candidate knows to double-check.
-- Keywords stay in English as they appear in the JD. Write "reason" in Traditional Chinese, 1–2 sentences."""
+Credit only what the CV actually shows. Never credit skills, titles or domains the CV does not contain.
+
+1. required_checks: list the JD's required qualifications / "must have" background (5–10 items, the most
+   important first). Split combined requirements into separate items. For each:
+   - met: the CV clearly shows it.
+   - partial: the CV shows something close but weaker (e.g. 7 years when 8 are required, a related domain,
+     the skill used in a different industry, a similar tool).
+   - missing: nothing in the CV supports it.
+   Put the CV evidence in a few words.
+2. preferred_checks: the same for "nice to have", "bonus" or "a plus" items (0–5 items).
+3. keywords: the 15–25 most important hard skills, methods, tools, domains and role terms in the JD,
+   spelled as in the JD (e.g. "workback plan", "dependency management", "OKRs", "Linear", "APIs").
+   Skip soft skills and generic words. found=true only if the CV has the same term or a clear synonym
+   an ATS would match (e.g. "post-mortems" for "retrospectives"); a vague relation is not enough.
+4. title_level (0–4):
+   4 = the CV has the same job title family at the required level AND meets the required years.
+   3 = same title family but up to 2 years short, OR an adjacent title (e.g. Project Manager for a
+       Program Manager role) that meets the required years.
+   2 = adjacent title and up to 2 years short, or one level below the role.
+   1 = related function but a different title family, or more than 2 years short.
+   0 = unrelated.
+   Count years only from roles in the relevant function.
+5. dealbreakers: hard requirements the candidate clearly does not meet (e.g. required years in a specific
+   role, mandatory domain, required language, location/work authorization, required certification).
+6. is_agency_or_advertising: true if the employer is an agency, or its core business is advertising or
+   marketing (including ad-tech). salary_below_floor: true only if the TOP of the stated salary range is
+   below {rules['min_salary']:,} CAD; false if no salary is stated.
+7. reason: 1–2 sentences in Traditional Chinese on the biggest gaps. If the job description says details
+   are missing, the source is unreliable, or the posting may be closed, say so.
+
+Keywords and checked items stay in English as they appear in the JD."""
 
     user = f"""<job>
 Title: {job['title']}
@@ -208,13 +315,34 @@ Location: {job['location']}
 
     response = client.messages.parse(
         model=MODEL,
-        max_tokens=4000,
+        max_tokens=6000,
         system=system,
         messages=[{"role": "user", "content": user}],
-        output_format=ATSResult,
+        output_format=ATSChecks,
     )
     track_usage(response)
-    return response.parsed_output
+    checks = response.parsed_output
+
+    total, parts = score(checks)
+    verdict, notes = decide(total, checks)
+    breakdown = "｜".join(f"{name} {value}" for name, value in parts.items())
+    reason = " ".join([*notes, f"【{breakdown}】", checks.reason])
+
+    return {
+        "ats_score": total,
+        "verdict": verdict,
+        "reason": reason,
+        "matched_keywords": [k.keyword for k in checks.keywords if k.found],
+        "missing_keywords": [k.keyword for k in checks.keywords if not k.found],
+        "dealbreakers": checks.dealbreakers,
+        "industry": checks.industry,
+        "is_agency_or_advertising": checks.is_agency_or_advertising,
+        "salary": checks.salary,
+        "work_arrangement": checks.work_arrangement,
+        "score_breakdown": parts,
+        "title_note": checks.title_note,
+        "required_checks": [c.model_dump() for c in checks.required_checks],
+    }
 
 
 def analyze_job(job, cv, rules):
@@ -240,7 +368,7 @@ def analyze_job(job, cv, rules):
         first_line = jd_text.splitlines()[0].removeprefix("SOURCE_URL:").strip()
         source_url = first_line.split()[0] if first_line else ""
 
-    return {**base, "jd_found": True, "jd_url": source_url, **result.model_dump()}
+    return {**base, "jd_found": True, "jd_url": source_url, **result}
 
 
 def print_result(r):
