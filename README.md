@@ -1,6 +1,6 @@
 # Job Search Agent
 
-A daily automated pipeline that reads my LinkedIn job alert emails, filters the roles, scores each one against my CV with Claude, and logs the results to a Google Sheet. Every morning I open one sheet and decide which roles are worth tailoring my resume for.
+A daily automated pipeline that reads the LinkedIn job alert emails, filters the roles, scores each one against the provided CV with Claude, and logs the results to a Google Sheet. Every morning automation opens one sheet and decides which roles are worth tailoring the resume for.
 
 I'm a production manager moving from VFX into tech. I built this to cut down the time I spent reading job descriptions that were never a fit, and to get hands-on with AI agents, APIs and automation.
 
