@@ -78,3 +78,7 @@ Python · Claude API (web search, structured outputs) · Gmail IMAP · Google Sh
 4. Edit `filters.yaml` for your own titles, locations and salary floor.
 5. Run it locally: `python main.py 14`
 6. To run it daily, add these GitHub Secrets: `GMAIL_ADDRESS`, `GMAIL_APP_PASSWORD`, `ANTHROPIC_API_KEY`, `GOOGLE_SHEET_ID`, `GOOGLE_SERVICE_ACCOUNT_JSON`, `CV_TEXT`.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
