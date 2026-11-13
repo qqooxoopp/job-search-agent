@@ -4,6 +4,8 @@ A daily automated pipeline that reads my LinkedIn job alert emails, filters the 
 
 I'm a production manager moving from VFX into tech. I built this to cut down the time I spent reading job descriptions that were never a fit, and to get hands-on with AI agents, APIs and automation.
 
+> **Status: paused (November 2026).** The agent ran every day from October to November 2026. The daily schedule is now turned off and the API keys have been removed. The code is shared here as a portfolio project; see [Setup](#setup) to run it with your own keys.
+
 ## How it works
 
 ```
@@ -25,7 +27,7 @@ LinkedIn job alert emails (Gmail)
 5. Write results     Google Sheet: Jobs tab (scores, gaps, verdict) + Rejected tab
 ```
 
-GitHub Actions runs it every day at 8:00 am Toronto time.
+While it was active, GitHub Actions ran it every morning (Toronto time).
 
 ## Design decisions
 
