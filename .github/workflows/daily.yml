@@ -9,8 +9,9 @@
 name: Daily job search
 
 on:
-  schedule:
-    - cron: "0 11 * * *"
+  # 2026 年 11 月起暫停每日排程。要恢復的話，取消下面兩行的註解，並設定好 GitHub Secrets。
+  # schedule:
+  #   - cron: "0 11 * * *"
   workflow_dispatch: # 允許在 GitHub 網頁上手動按按鈕執行（測試用）
     inputs:
       days_back:
